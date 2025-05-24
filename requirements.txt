@@ -1,0 +1,9 @@
+streamlit
+requests
+pillow
+numpy
+scikit-learn
+tensorflow
+spacy
+nltk
+fuzzywuzzy
