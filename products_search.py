@@ -1,6 +1,5 @@
 import http.client
 import json
-import re
 import urllib.parse
 
 import numpy as np
@@ -12,11 +11,13 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tensorflow.keras.applications import ResNet50
 from tensorflow.keras.applications.resnet50 import preprocess_input
 
-# Set your RapidAPI key
 RAPIDAPI_KEY = "RAPIDAPI_KEY"
 
+MAX_PRODUCTS_FOR_SIMILARITY = 20
 
-def fuzzy_search_and_filter(query, products, threshold=50):
+
+def fuzzy_search_and_filter(query, products, threshold=30, limit=None):
+    """Filter products by fuzzy search and optionally limit results"""
     filtered_products = []
 
     for product in products:
@@ -27,11 +28,15 @@ def fuzzy_search_and_filter(query, products, threshold=50):
             filtered_products.append(product)
 
     filtered_products.sort(key=lambda x: x["fuzzy_score"], reverse=True)
+    
+    if limit and len(filtered_products) > limit:
+        filtered_products = filtered_products[:limit]
+        st.info(f"Limited to top {limit} most relevant products for similarity comparison")
 
     return filtered_products
 
 
-def search_ebay(query, rapidapi_key):
+def search_ebay(query, rapidapi_key, limit_for_similarity=False):
     try:
         query = urllib.parse.quote(query)
         conn = http.client.HTTPSConnection("real-time-ebay-data.p.rapidapi.com")
@@ -85,7 +90,8 @@ def search_ebay(query, rapidapi_key):
                     }
                 )
 
-            filtered_products = fuzzy_search_and_filter(query, products, threshold=50)
+            limit = MAX_PRODUCTS_FOR_SIMILARITY if limit_for_similarity else None
+            filtered_products = fuzzy_search_and_filter(query, products, threshold=30, limit=limit)
             return filtered_products
         else:
             return []
@@ -94,7 +100,7 @@ def search_ebay(query, rapidapi_key):
         return []
 
 
-def search_walmart_products(product_name, threshold=50):
+def search_walmart_products(product_name, threshold=30, limit_for_similarity=False):
     url = "https://realtime-walmart-data.p.rapidapi.com/search"
     headers = {
         "x-rapidapi-host": "realtime-walmart-data.p.rapidapi.com",
@@ -124,11 +130,12 @@ def search_walmart_products(product_name, threshold=50):
                 }
             )
 
-    filtered_products = fuzzy_search_and_filter(product_name, products, threshold)
+    limit = MAX_PRODUCTS_FOR_SIMILARITY if limit_for_similarity else None
+    filtered_products = fuzzy_search_and_filter(product_name, products, threshold, limit=limit)
     return filtered_products
 
 
-def search_amazon(query, rapidapi_key, threshold=50):
+def search_amazon(query, rapidapi_key, threshold=30, limit_for_similarity=False):
     try:
         url = "https://real-time-amazon-data.p.rapidapi.com/search"
         headers = {
@@ -167,7 +174,8 @@ def search_amazon(query, rapidapi_key, threshold=50):
                         }
                     )
 
-                filtered_products = fuzzy_search_and_filter(query, products, threshold)
+                limit = MAX_PRODUCTS_FOR_SIMILARITY if limit_for_similarity else None
+                filtered_products = fuzzy_search_and_filter(query, products, threshold, limit=limit)
                 return filtered_products
             else:
                 return []
@@ -196,7 +204,7 @@ def get_image_features_resnet(image_url):
 def get_most_similar_product_from_platform(
     selected_product, platform_products, platform_name
 ):
-    """Find the most similar product from a specific platform's products"""
+    """Find the most similar product from a specific platform's products (limited set)"""
     selected_image_features = get_image_features_resnet(selected_product["image"])
 
     if not platform_products or selected_image_features is None:
@@ -204,8 +212,13 @@ def get_most_similar_product_from_platform(
 
     highest_similarity = -1
     most_similar_product = None
-
-    for product in platform_products:
+    
+    total_products = len(platform_products)
+    st.write(f"Checking similarity for {total_products} products from {platform_name}...")
+    
+    progress_bar = st.progress(0)
+    
+    for i, product in enumerate(platform_products):
         product_image_features = get_image_features_resnet(product["image"])
 
         if product_image_features is not None:
@@ -216,20 +229,25 @@ def get_most_similar_product_from_platform(
             if similarity > highest_similarity:
                 highest_similarity = similarity
                 most_similar_product = product
-
+        
+        progress_bar.progress((i + 1) / total_products)
+    
+    progress_bar.empty()  
+    
     return most_similar_product, highest_similarity, platform_name
 
 
 st.title("Product Search Across Amazon, eBay, and Walmart")
 st.write("Search for products and compare results from Amazon, eBay, and Walmart.")
 
+
 search_query = st.text_input("Enter product to search:")
 
 if st.button("Search"):
     with st.spinner("Searching across platforms..."):
-        amazon_products = search_amazon(search_query, RAPIDAPI_KEY)
-        ebay_products = search_ebay(search_query, RAPIDAPI_KEY)
-        walmart_products = search_walmart_products(search_query)
+        amazon_products = search_amazon(search_query, RAPIDAPI_KEY, limit_for_similarity=False)
+        ebay_products = search_ebay(search_query, RAPIDAPI_KEY, limit_for_similarity=False)
+        walmart_products = search_walmart_products(search_query, limit_for_similarity=False)
 
         st.session_state.amazon_products = amazon_products
         st.session_state.ebay_products = ebay_products
@@ -319,16 +337,13 @@ if "selected_product" in st.session_state:
             similar_products_results = []
 
             if st.session_state.selected_platform == "Amazon":
-                similar_ebay_products = search_ebay(selected["name"], RAPIDAPI_KEY)
-                similar_walmart_products = search_walmart_products(selected["name"])
-                print("Products found on eBay:", similar_ebay_products)
-                print("Products found on Walmart:", similar_walmart_products)
-                st.write(
-                    f"Number of products found on eBay: {len(similar_ebay_products)}"
-                )
-                st.write(
-                    f"Number of products found on Walmart: {len(similar_walmart_products)}"
-                )
+                similar_ebay_products = search_ebay(selected["name"], RAPIDAPI_KEY, limit_for_similarity=True)
+                similar_walmart_products = search_walmart_products(selected["name"], limit_for_similarity=True)
+                
+                print("Products found on eBay:", len(similar_ebay_products))
+                print("Products found on Walmart:", len(similar_walmart_products))
+                st.write(f"Found {len(similar_ebay_products)} relevant products on eBay")
+                st.write(f"Found {len(similar_walmart_products)} relevant products on Walmart")
 
                 if similar_ebay_products:
                     ebay_similar, ebay_similarity, _ = (
@@ -353,16 +368,13 @@ if "selected_product" in st.session_state:
                         )
 
             elif st.session_state.selected_platform == "eBay":
-                similar_amazon_products = search_amazon(selected["name"], RAPIDAPI_KEY)
-                similar_walmart_products = search_walmart_products(selected["name"])
-                print("Products found on Amazon:", similar_amazon_products)
-                print("Products found on Walmart:", similar_walmart_products)
-                st.write(
-                    f"Number of products found on Amazon: {len(similar_amazon_products)}"
-                )
-                st.write(
-                    f"Number of products found on Walmart: {len(similar_walmart_products)}"
-                )
+                similar_amazon_products = search_amazon(selected["name"], RAPIDAPI_KEY, limit_for_similarity=True)
+                similar_walmart_products = search_walmart_products(selected["name"], limit_for_similarity=True)
+                
+                print("Products found on Amazon:", len(similar_amazon_products))
+                print("Products found on Walmart:", len(similar_walmart_products))
+                st.write(f"Found {len(similar_amazon_products)} relevant products on Amazon")
+                st.write(f"Found {len(similar_walmart_products)} relevant products on Walmart")
 
                 if similar_amazon_products:
                     amazon_similar, amazon_similarity, _ = (
@@ -387,16 +399,13 @@ if "selected_product" in st.session_state:
                         )
 
             elif st.session_state.selected_platform == "Walmart":
-                similar_amazon_products = search_amazon(selected["name"], RAPIDAPI_KEY)
-                similar_ebay_products = search_ebay(selected["name"], RAPIDAPI_KEY)
-                print("Products found on Amazon:", similar_amazon_products)
-                print("Products found on eBay:", similar_ebay_products)
-                st.write(
-                    f"Number of products found on Amazon: {len(similar_amazon_products)}"
-                )
-                st.write(
-                    f"Number of products found on eBay: {len(similar_ebay_products)}"
-                )
+                similar_amazon_products = search_amazon(selected["name"], RAPIDAPI_KEY, limit_for_similarity=True)
+                similar_ebay_products = search_ebay(selected["name"], RAPIDAPI_KEY, limit_for_similarity=True)
+                
+                print("Products found on Amazon:", len(similar_amazon_products))
+                print("Products found on eBay:", len(similar_ebay_products))
+                st.write(f"Found {len(similar_amazon_products)} relevant products on Amazon")
+                st.write(f"Found {len(similar_ebay_products)} relevant products on eBay")
 
                 if similar_amazon_products:
                     amazon_similar, amazon_similarity, _ = (
@@ -443,4 +452,3 @@ if "selected_product" in st.session_state:
                     st.write("---")
             else:
                 st.warning("No similar products found on other platforms.")
-
