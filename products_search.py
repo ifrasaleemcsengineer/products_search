@@ -3,10 +3,8 @@ import json
 import re
 import urllib.parse
 
-import nltk
 import numpy as np
 import requests
-import spacy
 import streamlit as st
 from fuzzywuzzy import fuzz
 from PIL import Image
